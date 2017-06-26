@@ -38,6 +38,12 @@ import org.eclipse.uml2.uml.UMLPackage;
 import org.eclipse.uml2.uml.resource.UMLResource;
 import org.eclipse.uml2.uml.resources.util.UMLResourcesUtil;
 
+// GraphStream (a dynamic graph library). Used to create the interoperability graphs.
+// http://graphstream-project.org/
+import org.graphstream.graph.*;
+import org.graphstream.graph.implementations.*;
+import org.graphstream.ui.view.Viewer;
+
 
 /**
  * A Java program that may be run stand-alone (with the required EMF and UML2
@@ -48,13 +54,23 @@ public class interoperability
 {
 
 	public static boolean DEBUG = true;
-
+	private static MultiGraph graph;
 	private static File outputDir;
-
 	private static final ResourceSet RESOURCE_SET;
-	
 	private static PrintWriter writer;
-
+	private static PrintWriter writerCN;
+	private static int numElements = 0;
+	private static int numClasses = 0;
+	private static int numCN = 0;
+	private static int numCNSatisfied = 0;
+	private static boolean flag_language = true;
+	private static boolean flag_address = true;
+	private static boolean drawGraph = true;
+	private static int numSubCNTotal = 0;
+	private static EList<org.eclipse.uml2.uml.Class> actors_stats = new BasicEList<org.eclipse.uml2.uml.Class>();
+	private static EList<org.eclipse.uml2.uml.Class> mps_stats = new BasicEList<org.eclipse.uml2.uml.Class>();
+	private static EList<org.eclipse.uml2.uml.Class> lang_stats = new BasicEList<org.eclipse.uml2.uml.Class>();
+	
 	static 
 	{
 		// Create a resource-set to contain the resource(s) that we load and
@@ -86,29 +102,64 @@ public class interoperability
 			System.exit(1);
 		}
 		
+		// Render engine (high quality)
+		System.setProperty("org.graphstream.ui.renderer", "org.graphstream.ui.j2dviewer.J2DGraphRenderer");
+		
+		// Create MultiGraph
+		graph = new MultiGraph("Interoperability");
+        graph.addAttribute("ui.quality");
+        graph.addAttribute("ui.antialias");
+        graph.addAttribute("ui.stylesheet", "url('file:///C:/Users/User/workspace/interoperability_script/styleGraph.css')"); // Modify path
+        
 		// Create log text file
 		writer = new PrintWriter("results.txt", "UTF-8");
+		// Create log text file CN
+		writerCN = new PrintWriter("cntable.txt", "UTF-8");
+		writerCN.printf("No\tCommunication Need\tInitial Actor\tFinal Actor");
+		writerCN.println();
 
 		banner("Start. Interoperability metamodel conformance evaluation.");
 		
 		// Load the model
-		Model model = (Model) load(URI.createFileURI(outputDir.getAbsolutePath()).appendSegment("scadamodel").appendFileExtension(UMLResource.FILE_EXTENSION));
+		Model model = (Model) load(URI.createFileURI(outputDir.getAbsolutePath()).appendSegment("modelName").appendFileExtension(UMLResource.FILE_EXTENSION)); // Modify UML model name
 		
 		banner("Multiplicity rules checks.");
-		if (parsePackagesMultiplicity(model))
-		{
-//			banner("Interoperability rules checks.");
-//			parsePackagesInteroperability(model);
-		}
+		parsePackagesMultiplicity(model);
 		
+		out("");
 		banner("Interoperability rules checks.");
+		out("");
+		out("");
 		parsePackagesInteroperability(model);
+		out("");
+		banner("Statistics.");
+		out("Number of Communication Needs satisfied = %d", numCNSatisfied);
+		out("Number of Sub Communication Needs satisfied = %d", numSubCNTotal);
+		out("Number of Actors implicated = %d", actors_stats.size());
+		out("Number of Message-Passing Systems implicated = %d", mps_stats.size());
+		out("Number of Languages implicated = %d", lang_stats.size());
+		out("");
+		out("Number of Communication Needs = %d", numCN);
+		out("Number of Classes = %d", numClasses);
+		out("Total number of Elements/Types = %d", numElements);
+		out("");
+		banner("End.");
 				
 		// Save the model
 		save(model, URI.createFileURI(outputDir.getAbsolutePath()).appendSegment("savedmodel").appendFileExtension(UMLResource.FILE_EXTENSION));
 		
-		// Close log text file
+		// Close log text files
 		writer.close();
+		writerCN.close();
+		
+		// Display MultiGraph
+		if (drawGraph == true)
+		{
+//			graph.display();
+			Viewer viewer = graph.display();	
+			Thread.sleep(7000);
+			viewer.disableAutoLayout();
+		}
 	}
 	
 	
@@ -148,6 +199,10 @@ public class interoperability
 					case "Actor":
 						correctMultiplicity = multiplicityActor((org.eclipse.uml2.uml.Class)type) & correctMultiplicity;
 						break;
+					case "Language":
+						break;
+					case "Reference Language":
+						break;
 					}
 				}
 			}
@@ -165,11 +220,19 @@ public class interoperability
 		EList<Type> listTypes = _package.getOwnedTypes();
 		for (Type type : listTypes)
 		{
+			numElements++;
 			if (type instanceof org.eclipse.uml2.uml.Class)
 			{
+				numClasses++;
 				if (type.getAppliedStereotype("RootInteroperability::Communication Need")!=null)
 				{
+					numCN++;
 					communicationNeedSatisfied((org.eclipse.uml2.uml.Class)type);
+//					// For debugging communication needs independently
+//					if (((org.eclipse.uml2.uml.Class)type).getName().equals("Class Name"))
+//					{
+//						communicationNeedSatisfied((org.eclipse.uml2.uml.Class)type);
+//					}
 				}
 			}
 		}
@@ -180,6 +243,7 @@ public class interoperability
 		}
 	}
 	
+	// Returns a list with the classes associated to _class given certain stereotypes and/or member ends
 	protected static EList<org.eclipse.uml2.uml.Class> getAssociations(org.eclipse.uml2.uml.Class _class, String stereotype, String memberEndCurrent, String memberEndTarget)
 	{
 		EList<org.eclipse.uml2.uml.Class> classesList = new BasicEList<org.eclipse.uml2.uml.Class>();
@@ -312,10 +376,12 @@ public class interoperability
 		boolean satisfied = false;
 		int i = 0, j;
 		EList<org.eclipse.uml2.uml.Class> cnActors = getAssociations(cn, "RootInteroperability::Actor", null, null);
-		EList<org.eclipse.uml2.uml.Class> emptyList = new BasicEList<org.eclipse.uml2.uml.Class>();
+		EList<org.eclipse.uml2.uml.Class> emptyList1 = new BasicEList<org.eclipse.uml2.uml.Class>();
+		EList<org.eclipse.uml2.uml.Class> emptyList2 = new BasicEList<org.eclipse.uml2.uml.Class>();
 		EList<org.eclipse.uml2.uml.Class> act1Languages = new BasicEList<org.eclipse.uml2.uml.Class>();
 		
 		out("Communication Need: %s", cn.getName());
+		out("------------------------------------");
 		out("");
 		
 		for (org.eclipse.uml2.uml.Class act1 : cnActors)
@@ -326,19 +392,24 @@ public class interoperability
 			{
 				if (act1 != act2 && i < j) // All the possible combinations given that act1 != act2
 				{
-					if (isSatisfied(cn, act1, act2, emptyList, act1Languages))
+					if (isSatisfied(cn, act1, act2, emptyList1, act1Languages, emptyList2))
 					{
 						cn.setValue(cn.getAppliedStereotype("RootInteroperability::Communication Need"), "satisfied", true);
-						out("Communication Need::%s --> Satisfied", cn.getName());
-						out("");
 						out("");
 						satisfied = true;
+						numCNSatisfied++;
+						writerCN.printf("%d & %s & %s & %s \\\\", numCNSatisfied, cn.getName(), act1.getName(), act2.getName());
+						writerCN.println();
+						writerCN.printf("\\hline");
+						writerCN.println();
 					}
 					else
 					{
 						out("Communication Need::%s --> Not satisfied", cn.getName());
 						out("");
+						out("Communication Need not satisfaction analysis:");
 						out("");
+						notSatisfied(cn, act1, act2);
 					}
 				}
 				j++;
@@ -349,7 +420,7 @@ public class interoperability
 	}
 	
 	// Rule 2
-	protected static boolean isSatisfied(org.eclipse.uml2.uml.Class cn, org.eclipse.uml2.uml.Class currActor, org.eclipse.uml2.uml.Class targetActor, EList<org.eclipse.uml2.uml.Class> vN, EList<org.eclipse.uml2.uml.Class> allowedLang)
+	protected static boolean isSatisfied(org.eclipse.uml2.uml.Class cn, org.eclipse.uml2.uml.Class currActor, org.eclipse.uml2.uml.Class targetActor, EList<org.eclipse.uml2.uml.Class> vN, EList<org.eclipse.uml2.uml.Class> allowedLang, EList<org.eclipse.uml2.uml.Class> vNLang)
 	{
 		boolean satisfied = false;
 		EList<org.eclipse.uml2.uml.Class> currActorMPS = getAssociations(currActor, "RootInteroperability::Message-Passing System", null, null);
@@ -364,10 +435,79 @@ public class interoperability
 		
 		if (currActor == targetActor)
 		{
-			out("Possible communication path:");
-			for (org.eclipse.uml2.uml.Class seq : vN)
+			int j = 0;
+			for (int i = 0; i < vN.size() - 2; i = i + 2)
 			{
-				out("-> %s", seq.getName());
+				String languages = null;
+				j++;
+				if (j < vNLang.size() && vNLang.get(j).getAppliedStereotype("RootInteroperability::Language") != null)
+				{
+					languages = String.format("%s", vNLang.get(j).getName());
+					// For statistics
+					if (!lang_stats.contains(vNLang.get(j)))
+					{
+						lang_stats.add(vNLang.get(j));
+					}
+				}
+				j++;
+				while (j < vNLang.size() && vNLang.get(j).getAppliedStereotype("RootInteroperability::Language") != null)
+				{
+					languages = String.format("%s - %s", languages, vNLang.get(j).getName());
+					// For statistics
+					if (!lang_stats.contains(vNLang.get(j)))
+					{
+						lang_stats.add(vNLang.get(j));
+					}
+					j++;
+				}
+				out("%s <--> %s <--> %s (%s)", vN.get(i).getName(), vN.get(i+1).getName(), vN.get(i+2).getName(), languages);
+				
+				// For statistics
+				if (!actors_stats.contains(vN.get(i)))
+				{
+					actors_stats.add(vN.get(i));
+				}
+				if (!mps_stats.contains(vN.get(i+1)))
+				{
+					mps_stats.add(vN.get(i+1));
+				}
+				numSubCNTotal++;
+				
+				// MultiGraph drawing
+				if (flag_language == true && flag_address == true && drawGraph == true)
+				{
+					if (graph.getNode(vN.get(i).getQualifiedName()) == null)
+					{
+						Node node = graph.addNode(vN.get(i).getQualifiedName());
+						node.addAttribute("ui.label", vN.get(i).getName());
+						node.addAttribute("ui.class", "actor");
+					}
+					if (graph.getNode(vN.get(i+1).getQualifiedName()) == null)
+					{
+						Node node = graph.addNode(vN.get(i+1).getQualifiedName());
+						node.addAttribute("ui.label", vN.get(i+1).getName());
+						node.addAttribute("ui.class", "mps");
+					}
+					if (graph.getNode(vN.get(i+2).getQualifiedName()) == null)
+					{
+						Node node = graph.addNode(vN.get(i+2).getQualifiedName());
+						node.addAttribute("ui.label", vN.get(i+2).getName());
+						node.addAttribute("ui.class", "actor");
+					}
+					String edgeLabel = String.format("#%d", numCNSatisfied+1);
+					String edgeId = String.format("%s_%s-%s", cn.getName(), vN.get(i).getName(), vN.get(i+1).getName());
+					if (graph.getEdge(edgeId) == null)
+					{
+						Edge edge = graph.addEdge(edgeId, vN.get(i).getQualifiedName(), vN.get(i+1).getQualifiedName());
+						edge.addAttribute("ui.label", edgeLabel);
+					}
+					edgeId = String.format("%s_%s-%s", cn.getName(), vN.get(i+1).getName(), vN.get(i+2).getName());
+					if (graph.getEdge(edgeId) == null)
+					{
+						Edge edge = graph.addEdge(edgeId, vN.get(i+1).getQualifiedName(), vN.get(i+2).getQualifiedName());
+						edge.addAttribute("ui.label", edgeLabel);
+					}
+				}
 			}
 			out("");
 			return true; // Target actor reached
@@ -398,31 +538,43 @@ public class interoperability
 				
 				for (org.eclipse.uml2.uml.Class actor : mpsActor)
 				{
+					// For debugging
 //					out("Current Actor: %s - Next Actor: %s - MPS: %s", currActor.getName(), actor.getName(), mps.getName());
 					allowedLanguages = getAllowedLanguages(cn, currActor, actor, mps, allowedLang);
+					// For debugging
 //					for (org.eclipse.uml2.uml.Class _class : allowedLanguages)
 //					{
 //						out("Allowed language: %s", _class.getName());
 //					}
-					if (conditionsForSatisfaction(cn, currActor, actor, mps) && allowedLanguages.isEmpty() == false)
+					if ((allowedLanguages.isEmpty() == false || flag_language == false) && (conditionsForSatisfaction(cn, currActor, actor, mps)))
 					{
 						// Add MPS and actors to the visited nodes
 						if (!vN.contains(mps))
 						{
 							vN.add(mps);
 						}
-//						vN.add(mps);
 						if (!vN.contains(actor))
 						{
 							vN.add(actor);
 						}
+						// Save allowed languages to the allowed languages visited nodes
+						vNLang.add(mps); // To distinguish between allowedLanguages from different actors later
+						for (org.eclipse.uml2.uml.Class _class : allowedLanguages)
+						{
+							vNLang.add(_class);
+						}
 						
-						if (isSatisfied(cn, actor, targetActor, vN, allowedLanguages)) // Recursion
+						if (isSatisfied(cn, actor, targetActor, vN, allowedLanguages, vNLang)) // Recursion
 						{
 							satisfied = true;
 						}
 						vN.remove(actor);
 						vN.remove(vN.lastIndexOf(mps));
+						while (vNLang.size() > 0 && vNLang.get(vNLang.size()-1).getAppliedStereotype("RootInteroperability::Language") != null)
+						{
+							vNLang.remove(vNLang.size()-1); // Remove language
+						}
+						vNLang.remove(vNLang.size()-1); // Remove mps
 					}
 				}
 			}
@@ -437,7 +589,7 @@ public class interoperability
 		EList<org.eclipse.uml2.uml.Class> addressingNeed = getAssociations(cn, "RootInteroperability::Communication Need", null, "addressingNeed");
 		if (actorsAreAvailable(currActor, nextActor, mps) && noDistortedMessage(currActor, nextActor, mps) && noDroppedMessage(currActor, nextActor, mps))
 		{
-			if (addressingSatisfied(currActor, nextActor, mps, emptyList))
+			if (addressingSatisfied(currActor, nextActor, mps, emptyList) || flag_address == false)
 			{
 				return true;
 			}
@@ -590,7 +742,6 @@ public class interoperability
 							superLanguages = getSuperLanguage(referenceLang.get(0), emptyList);
 							if ((superLanguages.contains(lang)) && (superLanguages.contains(nLang)))
 							{
-//								out("Translated language -> %s to %s", lang.getName(), nLang.getName());
 								if (!translatedLanguagesList.contains(nLang))
 								{
 									translatedLanguagesList.add(nLang);
@@ -617,7 +768,6 @@ public class interoperability
 			if (mpsLang.contains(carryingLang))
 			{
 				compatible = true;
-//				out("Message-Passing System::%s compatible with Language::%s", mps.getName(), carryingLang.getName());
 			}
 		}
 		if (compatible)
@@ -795,7 +945,6 @@ public class interoperability
 		{
 			if (addressLang.contains(language))
 			{
-//				out("Message-Passing System::%s contains Language::%s", mps.getName(), language.getName());
 				return true;
 			}
 		}
@@ -868,6 +1017,69 @@ public class interoperability
 			}
 		}
 		return false;
+	}
+	
+	
+	// Communication need not satisfied (reasons)
+	protected static void notSatisfied(org.eclipse.uml2.uml.Class cn, org.eclipse.uml2.uml.Class act1, org.eclipse.uml2.uml.Class act2)
+	{
+		EList<org.eclipse.uml2.uml.Class> emptyList1 = new BasicEList<org.eclipse.uml2.uml.Class>();
+		EList<org.eclipse.uml2.uml.Class> emptyList2 = new BasicEList<org.eclipse.uml2.uml.Class>();
+		EList<org.eclipse.uml2.uml.Class> act1Languages = getAssociations(act1, "RootInteroperability::Language", null, null);
+		EList<org.eclipse.uml2.uml.Class> act1LanguagesAux = new BasicEList<org.eclipse.uml2.uml.Class>();
+		act1LanguagesAux.addAll(act1Languages);
+		
+		flag_language = false;
+		flag_address = false;
+		if (isSatisfied(cn, act1, act2, emptyList1, act1Languages, emptyList2))
+		{
+			out("Ok: Path for the communication to be possible.");
+			out("");
+			flag_language = false;
+			flag_address = true;
+			emptyList1.clear();
+			emptyList2.clear();
+			act1Languages.clear();
+			act1Languages.addAll(act1LanguagesAux);
+			if (isSatisfied(cn, act1, act2, emptyList1, act1Languages, emptyList2))
+			{
+				out("Ok: Addressing satisfied.");
+				out("Problem: No allowed languages.");
+				out("");
+				out("");
+			}
+			else
+			{
+				flag_language = true;
+				flag_address = false;
+				emptyList1.clear();
+				emptyList2.clear();
+				act1Languages.clear();
+				act1Languages.addAll(act1LanguagesAux);
+				if (isSatisfied(cn, act1, act2, emptyList1, act1Languages, emptyList2))
+				{
+					out("Ok: Allowed languages.");
+					out("Problem: Addressing not satisfied.");
+					out("");
+					out("");
+				}
+				else
+				{
+					out("Problem: No allowed languages.");
+					out("Problem: Addressing not satisfied.");
+					out("");
+					out("");
+				}
+			}
+		}
+		else
+		{
+			out("Problem: No path for the communication to be possible.");
+			out("");
+			out("");
+		}
+	flag_language = true;
+	flag_address = true;
 	}
 	
 
